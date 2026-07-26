@@ -5,6 +5,7 @@ so callers can import it directly from the package.
 """
 
 import logging
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,13 @@ from aind_analysis_arch_result_access.util.s3 import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
+# All known AIND Analysis Framework tags, queried together by default so that
+# results from every framework version show up unless the caller narrows it down.
+AIND_ANALYSIS_TAGS_DFT = [
+    "aind-analysis-framework v0.1",
+    "aind-analysis-framework v0.2",
+]
 
 # New collection
 analysis_docDB_dft = MetadataDbClient(
@@ -56,12 +64,23 @@ def _add_qvalue_spread(latents):
 
 
 def build_query_new_format(
-    from_custom_query=None, subject_id=None, session_date=None, agent_alias=None
+    from_custom_query=None, subject_id=None, session_date=None, agent_alias=None, analysis_tag=None
 ):
-    """Build query for new AIND Analysis Framework format."""
+    """Build query for new AIND Analysis Framework format.
+
+    Parameters
+    ----------
+    analysis_tag : str or list of str, optional
+        The analysis_tag(s) of the AIND Analysis Framework to query. A list is
+        matched with $in. Defaults to AIND_ANALYSIS_TAGS_DFT (all known versions).
+    """
+    if analysis_tag is None:
+        analysis_tag = AIND_ANALYSIS_TAGS_DFT
     filter_query = {
         "processing.data_processes.code.parameters.analysis_name": "MLE fitting",
-        "processing.data_processes.code.parameters.analysis_tag": "aind-analysis-framework v0.1",
+        "processing.data_processes.code.parameters.analysis_tag": (
+            {"$in": list(analysis_tag)} if isinstance(analysis_tag, (list, tuple)) else analysis_tag
+        ),
     }
 
     # If custom query is provided, use it exclusively
@@ -76,11 +95,14 @@ def build_query_new_format(
             "agent_alias, or from_custom_query!"
         )
 
-    # Build a dictionary with only provided keys
+    # Build a dictionary with only provided keys.
+    # Note that agent_alias lives under output_parameters.fitting_results.fit_settings,
+    # while subject_id and session_date are directly under output_parameters.
     standard_query = {
         "processing.data_processes.output_parameters.subject_id": subject_id,
         "processing.data_processes.output_parameters.session_date": session_date,
-        "processing.data_processes.output_parameters.fit_settings.agent_alias": agent_alias,
+        "processing.data_processes.output_parameters."
+        "fitting_results.fit_settings.agent_alias": agent_alias,
     }
     # Update filter_query only with non-None values
     filter_query.update({k: v for k, v in standard_query.items() if v is not None})
@@ -151,6 +173,7 @@ def _build_projection(if_include_metrics: bool, is_new_format: bool = False) -> 
             "n_trials": f"${fr}.n_trials",
             "S3_location": "$location",
             "CO_asset_id": "$processing.data_processes.code.input_data.url",
+            "analysis_tag": "$processing.data_processes.code.parameters.analysis_tag",
         }
     else:
         fr = "analysis_results"  # Fitting results path (reuse variable name)
@@ -246,6 +269,7 @@ def get_mle_model_fitting(
     session_date: str = None,
     agent_alias: str = None,
     from_custom_query: dict = None,
+    analysis_tag: str = None,
     only_recent_version: bool = True,
     if_include_metrics: bool = True,
     if_include_latent_variables: bool = True,
@@ -278,6 +302,12 @@ def get_mle_model_fitting(
     from_custom_query : dict, optional
         A custom MongoDB query dictionary that overrides all other query parameters.
         If provided, subject_id, session_date, and agent_alias are ignored.
+    analysis_tag : str or list of str, optional
+        Which AIND Analysis Framework version(s) to query, e.g.
+        "aind-analysis-framework v0.2" or a list of tags (matched with $in).
+        Defaults to all known versions (`AIND_ANALYSIS_TAGS_DFT`). This only
+        affects the AIND Analysis Framework side; Han's prototype pipeline is
+        always queried with its own analysis_ver.
     only_recent_version : bool, default=True
         If True, keeps only the most recent version when multiple records have
         the same nwb_name and agent_alias.
@@ -307,6 +337,8 @@ def get_mle_model_fitting(
 
         Always included:
             - _id : Analysis record ID
+            - pipeline_source : Which pipeline produced the record
+            - analysis_tag : AIND Analysis Framework version (NaN for Han's pipeline)
             - nwb_name : NWB file name
             - agent_alias : Model agent name
             - status : Fitting status ('success' or 'failed')
@@ -340,8 +372,9 @@ def get_mle_model_fitting(
     Notes
     -----
     - The function queries the 'dynamic-foraging-model-fitting' collection in the
-      analysis database with analysis_name='MLE fitting' and
-      analysis_ver='first version @ 0.10.0'.
+      analysis database with analysis_name='MLE fitting', for both the AIND Analysis
+      Framework (analysis_tag, see `analysis_tag` above) and Han's prototype
+      pipeline (analysis_ver='first version @ 0.10.0').
     - If multiple NWB files exist for the same session (duplicated agent_alias),
       a warning is printed suggesting to check timestamps.
     - Only successful fits (status='success') will have latent variables retrieved.
@@ -375,11 +408,18 @@ def get_mle_model_fitting(
 
     >>> custom_query = {"subject_id": {"$in": ["12345", "67890"]}}
     >>> df = get_mle_model_fitting(from_custom_query=custom_query)
+
+    Fetch only results from a specific AIND Analysis Framework version:
+
+    >>> df = get_mle_model_fitting(
+    ...     subject_id="820688",
+    ...     analysis_tag="aind-analysis-framework v0.2",
+    ... )
     """
 
     # -- Fetch from both AIND Analysis Framework and Han's prototype analysis pipeline --
     records_new = _try_retrieve_records(
-        build_query_new_format,
+        partial(build_query_new_format, analysis_tag=analysis_tag),
         "AIND Analysis Framework",
         if_include_metrics,
         subject_id,

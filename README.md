@@ -40,7 +40,8 @@ print(df.columns)
 #        'prediction_accuracy', 'k_model', 'AIC', 'BIC', 'LPT', 'LPT_AIC',
 #        'LPT_BIC', 'params', 'prediction_accuracy_test',
 #        'prediction_accuracy_fit', 'prediction_accuracy_test_bias_only',
-#        'pipeline_source', 'S3_location', 'latent_variables', 'qvalue_spread'],
+#        'pipeline_source', 'analysis_tag', 'S3_location', 'latent_variables',
+#        'qvalue_spread'],
 #       dtype='object')
 
 print(df[["agent_alias", "n_trials", "AIC", "pipeline_source"]])
@@ -49,6 +50,19 @@ print(df[["agent_alias", "n_trials", "AIC", "pipeline_source"]])
 # 1  QLearning_L1F1_CKfull_softmax       394   238.848589  han's analysis pipeline
 # 2       ForagingCompareThreshold       394   242.957376  han's analysis pipeline
 # ...
+```
+
+#### Control which AIND Analysis Framework version to fetch
+
+By default, **all** framework versions are queried (`aind-analysis-framework v0.1` and `v0.2`),
+and the returned `analysis_tag` column tells you which version each record came from
+(`NaN` for Han's pipeline). To pin a single version:
+
+```python
+df = get_mle_model_fitting(
+    subject_id="820688",
+    analysis_tag="aind-analysis-framework v0.2",  # or a list of tags
+)
 ```
 
 #### Control which pipeline version to fetch
